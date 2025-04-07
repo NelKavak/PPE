@@ -25,10 +25,10 @@ MAX_TIME_IN_PARK = 36000  # à ajuster selon le comportement souhaité
 
 # Création des attractions (simulation de wagons)
 attractions = {
-    "Space Mountain": (200, 200, 95, 1),
-    "Big Thunder Mountain": (600, 200, 45, 2),
+    "Space Mountain": (200, 200, 25, 1),
+    "Big Thunder Mountain": (600, 200, 15, 2),
     "Pirates des Caraïbes": (200, 500, 20, 3),
-    "Peter Pan’s Flight": (600, 500, 40, 3),
+    "Peter Pan’s Flight": (600, 500, 10, 3),
     
     "A": (300, 500, 20, 3),
     "B": (300, 100, 40, 3),
@@ -242,7 +242,7 @@ while running:
                 spawn_interval = min(100, spawn_interval + 1)
 
     if visitor_spawn_timer <= 0:
-        num_visitors = random.randint(1, 3)
+        num_visitors = random.randint(2, 5)
         for _ in range(num_visitors):
             if random.random() < spawn_probability:
                 visitors.append(generate_new_visitor())
@@ -275,12 +275,7 @@ while running:
             visitor["stuck_timer"] = 0
         visitor["prev_position"] = visitor["position"].copy()
         visitor["prev_destination"] = visitor["destination"]
-        if visitor["stuck_timer"] > 300:
-            print(f"🔴 Visiteur {id(visitor)} semble bloqué depuis {visitor['stuck_timer']} ticks, destination: {visitor['destination']}")
-            # Si un visiteur est bloqué dans une attraction, forcer la sortie en réinitialisant l'inside_timer
-            if visitor["destination"] in attractions and visitor["in_queue"]:
-                visitor["inside_timer"] = 0
-                print(f"⏱️ Forçage de sortie de l'attraction pour le visiteur {id(visitor)}.")
+        
 
         # Choix de la couleur selon l'état
         if visitor["finished"]:
@@ -404,11 +399,11 @@ while running:
             else:
                 visitor["exit_direction"] = np.array([0, 0])
 
-    average_wait_fixed = (total_wait_fixed / count_fixed) / 60 if count_fixed > 0 else 0
-    average_wait_adaptive = (total_wait_adaptive / count_adaptive) / 60 if count_adaptive > 0 else 0
+    average_wait_fixed = 10 * (total_wait_fixed / count_fixed) / 60 if count_fixed > 0 else 0
+    average_wait_adaptive = 10 * (total_wait_adaptive / count_adaptive) / 60 if count_adaptive > 0 else 0
     fixed_wait_text = font.render(f"Fixed Path Avg Wait: {average_wait_fixed:.2f} min", True, (0, 255, 255))
     adaptive_wait_text = font.render(f"Adaptive Path Avg Wait: {average_wait_adaptive:.2f} min", True, (255, 140, 0))
-    screen.blit(fixed_wait_text, (10, 110))
+    screen.blit(fixed_wait_text , (10, 110))
     screen.blit(adaptive_wait_text, (10, 130))
 
     for attraction in cycle_timer:
