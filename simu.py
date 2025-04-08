@@ -61,7 +61,6 @@ for name in attraction_images:
 wait_time_history = {name: deque(maxlen=55) for name in attractions.keys()}
 
 
-# Interface utilisateur pour le parcours personnalisé
 class Button:
     def __init__(self, x, y, width, height, text, color=(100, 100, 100), hover_color=(150, 150, 150)):
         self.rect = pygame.Rect(x, y, width, height)
@@ -111,16 +110,19 @@ class Checkbox:
             return True
         return False
 
-
 class UserInterface:
     def __init__(self):
-        self.panel_width = int(WIDTH * 0.35)
-        self.panel_height = int(HEIGHT * 0.7)
+        self.default_panel_width = int(WIDTH * 0.35)
+        self.default_panel_height = int(HEIGHT * 0.7)
+
+        self.panel_width = self.default_panel_width
+        self.panel_height = self.default_panel_height
         self.panel_x = (WIDTH - self.panel_width) // 2
         self.panel_y = (HEIGHT - self.panel_height) // 2
 
         self.active = False
         self.route_calculated = False
+        self.show_only_result = False
         self.optimized_route = []
 
         checkbox_size = 20
@@ -146,7 +148,13 @@ class UserInterface:
             20, 20, "X", (255, 0, 0), (200, 0, 0)
         )
 
-        # Pour visualiser le chemin calculé
+        self.back_button = Button(
+            self.panel_x + 30,
+            self.panel_y + self.panel_height - 70,
+            button_width // 2, button_height, "Retour",
+            (100, 100, 100), (150, 150, 150)
+        )
+
         self.route_nodes = []
         self.route_edges = []
 
@@ -154,6 +162,7 @@ class UserInterface:
         self.active = not self.active
         if not self.active:
             self.route_calculated = False
+            self.show_only_result = False
 
     def update(self, mouse_pos, mouse_clicked):
         if not self.active:
@@ -161,6 +170,11 @@ class UserInterface:
 
         if self.close_button.update(mouse_pos, mouse_clicked):
             self.toggle()
+            return
+
+        if self.show_only_result:
+            if self.back_button.update(mouse_pos, mouse_clicked):
+                self.show_only_result = False
             return
 
         checkbox_clicked = False
@@ -173,6 +187,7 @@ class UserInterface:
             if selected_attractions:
                 self.calculate_optimal_route(selected_attractions)
                 self.route_calculated = True
+                self.show_only_result = True
             else:
                 self.route_calculated = False
 
@@ -191,7 +206,6 @@ class UserInterface:
             self.route_nodes = []
             self.route_edges = []
 
-            # Préparer la visualisation du parcours
             for node in optimal_path:
                 if node in attractions:
                     pos = attractions[node][:2]
@@ -199,7 +213,6 @@ class UserInterface:
                     pos = exit_gate
                 self.route_nodes.append(pos)
 
-            # Créer les segments entre chaque point consécutif
             for i in range(len(self.route_nodes) - 1):
                 self.route_edges.append((self.route_nodes[i], self.route_nodes[i + 1]))
         else:
@@ -211,61 +224,103 @@ class UserInterface:
         if not self.active:
             return
 
-        # Dessiner le panneau de fond
+        # Redimensionner dynamiquement si on affiche le parcours optimisé
+        if self.show_only_result and self.route_calculated:
+            # Calculer une hauteur adaptée au nombre d'attractions
+            displayable_route = [attraction for attraction in self.optimized_route if
+                                 attraction not in ["exit_gate", "Exit"]]
+            result_height = max(len(displayable_route) * 30 + 150, 150)  # Minimum 200px
+
+            self.panel_width = int(WIDTH * 0.2)
+            self.panel_height = result_height
+
+            # Positionner en bas à droite
+            self.panel_x = WIDTH - self.panel_width + 20  # 20px de marge
+            self.panel_y = HEIGHT - self.panel_height + 20  # 20px de marge
+        else:
+            self.panel_width = self.default_panel_width
+            self.panel_height = self.default_panel_height
+            self.panel_x = (WIDTH - self.panel_width) // 2
+            self.panel_y = (HEIGHT - self.panel_height) // 2
+
+        # Mise à jour des positions des boutons APRÈS le repositionnement du panneau
+        if self.show_only_result:
+            # Positions pour le panneau de résultat
+            self.back_button.x = self.panel_x + (self.panel_width - 200) // 2
+            self.back_button.y = self.panel_y + self.panel_height - 50
+        else:
+            # Positions pour le panneau principal
+            self.calculate_button.x = self.panel_x + (self.panel_width - 200) // 2
+            self.calculate_button.y = self.panel_y + self.panel_height - 70
+
+        # La croix reste toujours en haut à droite du panneau, peu importe son état
+        self.close_button = Button(
+                self.panel_x + self.panel_width - 30,
+                self.panel_y + 10,
+                20, 20, "X", (255, 0, 0), (200, 0, 0)
+        )
+
+        self.back_button = Button(
+            self.panel_x + self.panel_width - 30,
+            self.panel_y + 10,
+            20, 20, "X", (255, 0, 0), (200, 0, 0)
+        )
+
         panel_rect = pygame.Rect(self.panel_x, self.panel_y, self.panel_width, self.panel_height)
         pygame.draw.rect(surface, (50, 50, 50, 200), panel_rect)
         pygame.draw.rect(surface, (255, 255, 255), panel_rect, 2)
 
-        # Titre
-        title_text = large_font.render("Planifiez votre parcours", True, (255, 255, 255))
-        surface.blit(title_text, (self.panel_x + (self.panel_width - title_text.get_width()) // 2, self.panel_y + 20))
+        if self.show_only_result and self.route_calculated:
+            # Afficher uniquement le résultat du parcours optimisé
+            title_text = large_font.render("Votre parcours optimisé", True, (255, 255, 0))
+            surface.blit(title_text,
+                         (self.panel_x + (self.panel_width - title_text.get_width()) // 2, self.panel_y + 20))
 
-        # Instructions
-        instruction_text = font.render("Sélectionnez les attractions que vous souhaitez visiter:", True,
-                                       (255, 255, 255))
-        surface.blit(instruction_text, (self.panel_x + 50, self.panel_y + 70))
-
-        # Checkboxes
-        for checkbox in self.attraction_checkboxes:
-            checkbox.draw(surface)
-
-        # Bouton de calcul
-        self.calculate_button.draw(surface)
-
-        # Bouton de fermeture
-        self.close_button.draw(surface)
-
-        # Affichage du résultat du calcul
-        if self.route_calculated and self.optimized_route:
-            result_y = self.panel_y + 100 + len(self.attraction_checkboxes) * 40 + 20
-            result_text = font.render("Parcours optimisé :", True, (255, 255, 0))
-            surface.blit(result_text, (self.panel_x + 50, result_y))
-
-            # Filtrer "exit_gate" de l'affichage et commencer le compteur à 1
+            result_y = self.panel_y + 70
             displayable_route = [attraction for attraction in self.optimized_route if
-                                 attraction != "exit_gate" and attraction != "Exit"]
+                                 attraction not in ["exit_gate", "Exit"]]
 
             for i, attraction in enumerate(displayable_route):
                 route_text = font.render(f"{i + 1}. {attraction}", True, (255, 255, 255))
-                surface.blit(route_text, (self.panel_x + 70, result_y + 30 + i * 25))
+                surface.blit(route_text, (self.panel_x + 30, result_y + i * 30))
 
-        # Visualisation du parcours sur la carte si calculé
+            self.back_button.draw(surface)
+            self.close_button.draw(surface)
+
+        else:
+            # Afficher l'interface de sélection
+            title_text = large_font.render("Planifiez votre parcours", True, (255, 255, 255))
+            surface.blit(title_text,
+                         (self.panel_x + (self.panel_width - title_text.get_width()) // 2, self.panel_y + 20))
+
+            instruction_text = font.render("Sélectionnez les attractions que vous souhaitez visiter:", True,
+                                           (255, 255, 255))
+            surface.blit(instruction_text, (self.panel_x + 50, self.panel_y + 70))
+
+            for i, checkbox in enumerate(self.attraction_checkboxes):
+                checkbox.x = self.panel_x + 50
+                checkbox.y = self.panel_y + 100 + i * 40
+                checkbox.draw(surface)
+
+            self.calculate_button.draw(surface)
+            self.close_button.draw(surface)
+
+        # Toujours afficher le parcours optimisé s'il est calculé
         if self.route_calculated and self.route_edges:
             for start_pos, end_pos in self.route_edges:
                 pygame.draw.line(surface, (255, 255, 0), start_pos, end_pos, 3)
 
             for i, pos in enumerate(self.route_nodes):
                 pygame.draw.circle(surface, (0, 255, 0), pos, 8)
-                # N'afficher un numéro que pour les attractions (pas pour exit_gate/Exit)
                 if i < len(self.optimized_route):
                     node_name = self.optimized_route[i]
-                    if node_name != "exit_gate" and node_name != "Exit":
-                        # Trouver l'index dans la liste filtrable pour l'affichage du numéro
-                        filtered_idx = [a for a in self.optimized_route if a != "exit_gate" and a != "Exit"].index(
+                    if node_name not in ["exit_gate", "Exit"]:
+                        filtered_idx = [a for a in self.optimized_route if a not in ["exit_gate", "Exit"]].index(
                             node_name)
                         num_text = font.render(str(filtered_idx + 1), True, (0, 0, 0))
                         surface.blit(num_text,
                                      (pos[0] - num_text.get_width() // 2, pos[1] - num_text.get_height() // 2))
+
 
 def build_graph(last_attraction_for_adaptive=None):
     graph = {name: {} for name in attractions}
@@ -299,27 +354,14 @@ def build_graph(last_attraction_for_adaptive=None):
 
 
 def dijkstra(graph, start, targets):
-    """
-    Calculate the shortest path that visits all target attractions.
-
-    Args:
-        graph: The weighted graph of attractions
-        start: Starting point (usually 'exit_gate')
-        targets: List of attractions to visit
-
-    Returns:
-        Path that visits all targets in optimal order
-    """
     if not targets:
         return ["exit_gate", "Exit"]
 
-    # Create a complete path that visits all targets
     current = start
     path = [current]
     remaining_targets = targets.copy()
 
     while remaining_targets:
-        # Find the closest next target
         best_next = None
         best_cost = float('inf')
 
@@ -335,15 +377,13 @@ def dijkstra(graph, start, targets):
             path.append(current)
             remaining_targets.remove(current)
         else:
-            # No direct connection, just add the first remaining target
-            # This is a simplified approach
             current = remaining_targets[0]
             path.append(current)
             remaining_targets.remove(current)
 
-    # Add Exit to the end of path
     path.append("Exit")
     return path
+
 
 def update_visitor_next_destination(visitor):
     if visitor["fixed_path"] or visitor["commit_to_destination"]:
@@ -442,18 +482,16 @@ def generate_new_visitor():
     return visitor
 
 
-# Créer une instance de l'interface utilisateur
 ui = UserInterface()
 
-# Ajouter un bouton pour ouvrir l'interface de planification
 plan_route_button = Button(
     10, HEIGHT - 50, 180, 40,
     "Planifier mon parcours",
     (50, 50, 200), (80, 80, 220)
 )
 
-info_panel_width = int(WIDTH * 0.25)
-info_panel_height = int(HEIGHT * 0.25)
+info_panel_width = int(WIDTH * 0.2)
+info_panel_height = int(HEIGHT * 0.5)
 
 running = True
 while running:
@@ -478,7 +516,6 @@ while running:
                 pygame.draw.line(screen, (220, 220, 220), (x1, y1), (x2, y2), 1)
                 drawn.add(key)
 
-    # Gestion des événements
     mouse_pos = pygame.mouse.get_pos()
     mouse_clicked = False
 
@@ -497,10 +534,9 @@ while running:
             elif event.key == pygame.K_RIGHT:
                 spawn_interval = min(100, spawn_interval + 1)
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1:  # Clic gauche
+            if event.button == 1:
                 mouse_clicked = True
 
-    # Apparition progressive des visiteurs
     total_time_elapsed += 1
     visitor_spawn_timer -= 1
     spawn_probability = max(0.1, min(1.0, 1 - np.exp(-total_time_elapsed / spawn_curve_factor)))
@@ -512,13 +548,11 @@ while running:
                 visitors.append(generate_new_visitor())
         visitor_spawn_timer = spawn_interval
 
-    # Forcer la sortie des visiteurs qui passent trop de temps dans le parc
     for visitor in visitors:
         if total_time_elapsed - visitor["start_time"] > MAX_TIME_IN_PARK:
             visitor["destination"] = "Exit"
             visitor["going_to_exit"] = True
 
-    # Affichage des attractions et files d'attente
     for name, (x, y, capacity, duration) in attractions.items():
         if name in attraction_images:
             image_height = attraction_images[name].get_height()
@@ -541,13 +575,11 @@ while running:
         attraction_text = font.render(name, True, (255, 255, 255))
         screen.blit(attraction_text, (x - attraction_text.get_width() // 2, y + 30))
 
-    # Dessiner la sortie
     exit_radius = int(min(WIDTH, HEIGHT) * 0.025)
     pygame.draw.circle(screen, (255, 255, 255), exit_gate, exit_radius)
     exit_text = font.render("Entrée/Sortie", True, (0, 0, 0))
     screen.blit(exit_text, (exit_gate[0] - exit_text.get_width() // 2, exit_gate[1] - exit_text.get_height() // 2))
 
-    # Déplacement et affichage des visiteurs
     for visitor in visitors:
         if np.linalg.norm(visitor["position"] - visitor["prev_position"]) < 1 and visitor["prev_destination"] == \
                 visitor["destination"]:
@@ -603,11 +635,9 @@ while running:
         visitor_size = max(3, int(min(WIDTH, HEIGHT) * 0.005))
         pygame.draw.circle(screen, color, visitor["position"].astype(int), visitor_size)
 
-    # Supprimer les visiteurs ayant fini leur parcours
     visitors = [visitor for visitor in visitors if not visitor["finished"]]
     visitor_count = len(visitors)
 
-    # Gestion des cycles des attractions
     for attraction in queues:
         _, _, capacity, duration = attractions[attraction]
         if cycle_timer[attraction] == 0 and len(queues[attraction]) > 0:
@@ -678,11 +708,9 @@ while running:
             else:
                 visitor["exit_direction"] = np.array([0, 0])
 
-    # Calcul des temps d'attente moyens
     average_wait_fixed = 10 * (total_wait_fixed / count_fixed) / 60 if count_fixed > 0 else 0
     average_wait_adaptive = 10 * (total_wait_adaptive / count_adaptive) / 60 if count_adaptive > 0 else 0
 
-    # Affichage des statistiques
     margin = 10
     y_pos = margin
     line_height = int(HEIGHT * 0.03)
@@ -716,23 +744,19 @@ while running:
     y_pos += line_height
 
     for attraction in wait_time_history:
-        average_wait = sum(wait_time_history[attraction]) / len(wait_time_history[attraction]) / 60 if \
-        wait_time_history[attraction] else 0
-        wait_text = font.render(f"{attraction}: {average_wait:.1f} min", True, (255, 255, 255))
+        average_wait = sum(wait_time_history[attraction]) / len(wait_time_history[attraction]) / 60 if wait_time_history[attraction] else 0
+        wait_text = font.render(f"{attraction} Wait: {average_wait:.2f} min", True, (255, 255, 255))
         screen.blit(wait_text, (margin, y_pos))
         y_pos += line_height
 
-    # Mettre à jour les cycles des attractions
     for attraction in cycle_timer:
         if cycle_timer[attraction] > 0:
             cycle_timer[attraction] -= 1
 
-    # Mettre à jour et dessiner le bouton de planification
     if plan_route_button.update(mouse_pos, mouse_clicked):
         ui.toggle()
-    plan_route_button.draw(screen)
 
-    # Mettre à jour et dessiner l'interface utilisateur de planification
+    plan_route_button.draw(screen)
     ui.update(mouse_pos, mouse_clicked)
     ui.draw(screen)
 
