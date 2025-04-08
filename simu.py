@@ -8,6 +8,7 @@ import time
 # Initialisation Pygame
 pygame.init()
 
+
 # Obtention de la taille de l'écran
 info = pygame.display.Info()
 WIDTH, HEIGHT = info.current_w, info.current_h
