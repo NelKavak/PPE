@@ -1,13 +1,12 @@
-import pygame
 import random
 import numpy as np
 from collections import deque
 import heapq
 import time
+import pygame
 
 # Initialisation Pygame
 pygame.init()
-
 
 # Obtention de la taille de l'écran
 info = pygame.display.Info()
@@ -28,11 +27,9 @@ exited_count = 0
 # Constante pour limiter le temps passé dans le parc (en ticks)
 MAX_TIME_IN_PARK = 36000  # à ajuster selon le comportement souhaité
 
-
 # Définition des positions en pourcentage de la taille de l'écran
 def get_coords(x_percent, y_percent):
     return (int(WIDTH * x_percent), int(HEIGHT * y_percent))
-
 
 # Redéfinir les coordonnées des attractions en fonction de la taille de l'écran
 attractions = {
@@ -80,13 +77,21 @@ attraction_images = {
     "toutatis": pygame.image.load("logo.png").convert_alpha(),
 }
 
+# Image de maintenance
+maintenance_image = pygame.image.load("maintenance.png").convert_alpha()
+
 # Redimensionner les images des attractions selon la taille de l'écran
 image_size = int(min(WIDTH, HEIGHT) * 0.05)  # 5% de la plus petite dimension
 for name in attraction_images:
     attraction_images[name] = pygame.transform.smoothscale(attraction_images[name], (image_size, image_size))
 
+# Redimensionner l'image de maintenance
+maintenance_image = pygame.transform.smoothscale(maintenance_image, (image_size, image_size))
+
 wait_time_history = {name: deque(maxlen=55) for name in attractions.keys()}
 
+# Variable pour suivre l'état de maintenance de "toutatis"
+toutatis_maintenance = False
 
 def build_graph(last_attraction_for_adaptive=None):
     """Construit un graphe où chaque attraction est connectée entre elles et à l'entrée/sortie."""
@@ -123,7 +128,6 @@ def build_graph(last_attraction_for_adaptive=None):
 
     return graph
 
-
 def dijkstra(graph, start, targets):
     """Trouve le chemin optimal en visitant toutes les attractions désirées"""
     queue = []
@@ -148,37 +152,38 @@ def dijkstra(graph, start, targets):
     # Si aucun chemin complet n'est trouvé, retourner le meilleur chemin partiel
     return best_path if best_path else ["Exit"]
 
-
 def update_visitor_next_destination(visitor):
-    """Met à jour la destination du visiteur adaptatif en recalculant avec Dijkstra uniquement si nécessaire"""
     if visitor["fixed_path"] or visitor["commit_to_destination"]:
         return
 
-    # Si le visiteur a déjà effectué toutes ses attractions, il part
     if not visitor["desires"]:
         visitor["destination"] = "Exit"
         visitor["going_to_exit"] = True
         return
 
-    # Retirer l'attraction que l'on vient de quitter (si présente)
     if visitor["last_attraction"] in visitor["desires"]:
         visitor["desires"].remove(visitor["last_attraction"])
 
-    # Éliminer les doublons
+    if toutatis_maintenance:
+        print("Toutatis est en maintenance.")
+        # Retirer "toutatis" des désirs des visiteurs et rediriger ceux qui s'y rendent
+        for visitor in visitors:
+            if "toutatis" in visitor["desires"]:
+                visitor["desires"].remove("toutatis")
+            if visitor["destination"] == "toutatis":
+                # Pour les visiteurs à chemin fixe, forcer le passage à la prochaine attraction
+                if visitor["fixed_path"]:
+                    if visitor["desires"]:
+                        visitor["destination"] = visitor["desires"].pop(0)
+                    else:
+                        visitor["destination"] = "Exit"
+                        visitor["going_to_exit"] = True
+                else:
+                    # Pour les adaptatifs, recalculer le trajet
+                    visitor["commit_to_destination"] = False
+                    update_visitor_next_destination(visitor)
+
     visitor["desires"] = list(dict.fromkeys(visitor["desires"]))
-
-    """Met à jour la destination du visiteur adaptatif en recalculant avec Dijkstra"""
-
-    if visitor["fixed_path"]:
-        return  # Les visiteurs fixes ne changent jamais leur chemin
-
-    if not visitor["desires"]:
-        visitor["destination"] = "Exit"
-        visitor["going_to_exit"] = True
-        print(f"🏁 Visiteur {id(visitor)} a terminé son parcours et quitte le parc.")
-        return
-
-    visitor["desires"] = list(dict.fromkeys(visitor["desires"]))  # Supprime les doublons
     graph = build_graph()
 
     valid_destinations = [d for d in visitor["desires"] if d != visitor["last_attraction"]]
@@ -190,9 +195,7 @@ def update_visitor_next_destination(visitor):
 
     graph = build_graph(visitor["last_attraction"])
 
-    # 🕒 Mesurer le temps que prend Dijkstra
     start_time = time.time()
-
     optimal_path = dijkstra(graph, visitor["last_attraction"], valid_destinations)
     elapsed_time = time.time() - start_time
     print(f"🧠 Dijkstra pour visiteur {id(visitor)} a pris {elapsed_time:.4f} secondes")
@@ -200,9 +203,7 @@ def update_visitor_next_destination(visitor):
     if optimal_path and len(optimal_path) > 1:
         visitor["planned_route"] = optimal_path[1:]
         visitor["destination"] = visitor["planned_route"].pop(0)
-        visitor["commit_to_destination"] = True  # Bloquer les recalculs jusqu'à ce que la destination soit atteinte
-        # Debug (peut être activé)
-        # print(f"🔄 {id(visitor)} - Replanification vers {visitor['destination']} (désirs restants : {visitor['desires']})")
+        visitor["commit_to_destination"] = True
     else:
         visitor["destination"] = "Exit"
         visitor["going_to_exit"] = True
@@ -220,8 +221,12 @@ def generate_new_visitor():
         "silverstar": 8,
         "euromir": 4,
         "eurosat": 7,
-        "toutatis": 8
+
     }
+    if not toutatis_maintenance:
+        attraction_weights["toutatis"] = 8
+
+
     attractions_list = list(attraction_weights.keys())
     weights = list(attraction_weights.values())
     num_visits = random.randint(3, len(attractions_list) + 2)
@@ -260,7 +265,6 @@ def generate_new_visitor():
             visitor["destination"] = visitor["planned_route"].pop(0)
         visitor["commit_to_destination"] = True
     return visitor
-
 
 # Redimensionner le panneau d'information
 info_panel_width = int(WIDTH * 0.25)
@@ -311,6 +315,22 @@ while running:
             elif event.key == pygame.K_RIGHT:
                 spawn_interval = min(100, spawn_interval + 1)
 
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            mouse_x, mouse_y = event.pos
+            # Vérifier si le clic est dans la zone du bouton de maintenance
+            if 50 <= mouse_x <= 200 and 600 <= mouse_y <= 650:
+                toutatis_maintenance = not toutatis_maintenance
+                if toutatis_maintenance:
+                    print("Toutatis est en maintenance.")
+                    # Retirer "toutatis" des désirs des visiteurs
+                    for visitor in visitors:
+                        if "toutatis" in visitor["desires"]:
+                            visitor["desires"].remove("toutatis")
+                        if visitor["destination"] == "toutatis":
+                            update_visitor_next_destination(visitor)
+                else:
+                    print("Toutatis est de nouveau opérationnel.")
+
     if visitor_spawn_timer <= 0:
         num_visitors = random.randint(2, 5)
         for _ in range(num_visitors):
@@ -329,7 +349,10 @@ while running:
     for name, (x, y, capacity, duration) in attractions.items():
         if name in attraction_images:
             image_height = attraction_images[name].get_height()
-            screen.blit(attraction_images[name], (x - image_size // 2, y - image_height - 5))
+            if name == "toutatis" and toutatis_maintenance:
+                screen.blit(maintenance_image, (x - image_size // 2, y - image_height - 5))
+            else:
+                screen.blit(attraction_images[name], (x - image_size // 2, y - image_height - 5))
 
         # Calculer la longueur de la file d'attente
         queue_length = len(queues[name])
@@ -355,6 +378,13 @@ while running:
     # Dessiner la sortie
     exit_radius = int(min(WIDTH, HEIGHT) * 0.025)
     pygame.draw.circle(screen, (255, 255, 255), exit_gate, exit_radius)
+
+    # Dessiner le bouton de maintenance en haut à droite
+    pygame.draw.rect(screen, (255, 0, 0) if toutatis_maintenance else (0, 0, 0), pygame.Rect(50, 600, 150, 50))
+    pygame.draw.rect(screen, (255, 255, 255), pygame.Rect(50, 600, 150, 50), 3)
+
+    maintenance_text = font.render("Maintenance", True, (255, 255, 255))
+    screen.blit(maintenance_text, (70, 620))
 
     # Déplacement et affichage des visiteurs
     for visitor in visitors:
