@@ -12,8 +12,8 @@ pygame.init()
 
 # Obtention de la taille de l'écran
 info = pygame.display.Info()
-WIDTH, HEIGHT = info.current_w, info.current_h
-screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)
+WIDTH, HEIGHT = info.current_w,info.current_h
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
 font = pygame.font.Font(None, 20)
 large_font = pygame.font.Font(None, 36)
@@ -28,6 +28,7 @@ count_adaptive = 0
 exited_count = 0
 MAX_TIME_IN_PARK = 36000
 
+route_demo_visitor = None
 
 def get_coords(x_percent, y_percent):
     return (int(WIDTH * x_percent), int(HEIGHT * y_percent))
@@ -50,7 +51,6 @@ attractions = {
 
 exit_gate = get_coords(0.56, 0.5)
 
-# Création des files d'attente et des visiteurs à l'intérieur des attractions
 queues = {name: deque() for name in attractions.keys()}
 in_attraction = {name: deque() for name in attractions.keys()}
 cycle_timer = {name: 0 for name in attractions.keys()}
@@ -144,6 +144,8 @@ class UserInterface:
         self.route_calculated = False
         self.show_only_result = False
         self.optimized_route = []
+        self.last_update_time = 0
+        self.update_interval = 300  # Mettre à jour toutes les 5 secondes (300 frames à 60 FPS)
 
         checkbox_size = 20
         checkbox_spacing = 40
@@ -177,6 +179,7 @@ class UserInterface:
 
         self.route_nodes = []
         self.route_edges = []
+        self.selected_attractions = []
 
     def toggle(self):
         self.active = not self.active
@@ -184,7 +187,9 @@ class UserInterface:
             self.route_calculated = False
             self.show_only_result = False
 
-    def update(self, mouse_pos, mouse_clicked):
+    def update(self, mouse_pos, mouse_clicked, force_update=False):
+        global total_time_elapsed, witness_visitor
+
         if not self.active:
             return
 
@@ -195,6 +200,34 @@ class UserInterface:
         if self.show_only_result:
             if self.back_button.update(mouse_pos, mouse_clicked):
                 self.show_only_result = False
+
+            # Actualiser le parcours optimisé uniquement quand le visiteur témoin
+            # vient de terminer une attraction
+            if witness_visitor and witness_visitor.get("just_finished_attraction", False):
+                if self.selected_attractions:
+                    # Filtrer les attractions déjà visitées
+                    remaining_attractions = [a for a in self.selected_attractions
+                                             if a not in witness_visitor.get("visited_attractions", [])]
+                    self.calculate_optimal_route(remaining_attractions)
+                    witness_visitor["just_finished_attraction"] = False
+                    self.last_update_time = total_time_elapsed
+
+            if witness_visitor and witness_visitor.get("visited_attractions", []):
+                visited_positions = [exit_gate]  # Commencer par l'entrée
+                for attr in witness_visitor["visited_attractions"]:
+                    if attr in attractions:
+                        visited_positions.append(attractions[attr][:2])
+
+                # Dessiner les lignes rouges entre les positions visitées
+                for i in range(len(visited_positions) - 1):
+                    pygame.draw.line(screen, (255, 0, 0), visited_positions[i], visited_positions[i + 1], 3)
+
+                # Si le visiteur n'est pas à la sortie, ajouter une ligne jusqu'à sa position actuelle
+                if not witness_visitor.get("going_to_exit", False) and len(visited_positions) > 0:
+                    pygame.draw.line(screen, (255, 0, 0), visited_positions[-1],
+                                     witness_visitor["position"].astype(int), 3)
+
+
             return
 
         checkbox_clicked = False
@@ -203,13 +236,15 @@ class UserInterface:
                 checkbox_clicked = True
 
         if self.calculate_button.update(mouse_pos, mouse_clicked) and not checkbox_clicked:
-            selected_attractions = [cb.text for cb in self.attraction_checkboxes if cb.is_checked]
-            if selected_attractions:
-                self.calculate_optimal_route(selected_attractions)
+            self.selected_attractions = [cb.text for cb in self.attraction_checkboxes if cb.is_checked]
+            if self.selected_attractions:
+                self.calculate_optimal_route(self.selected_attractions)
                 self.route_calculated = True
                 self.show_only_result = True
+                self.last_update_time = total_time_elapsed
             else:
                 self.route_calculated = False
+
 
     def calculate_optimal_route(self, selected_attractions):
         if not selected_attractions:
@@ -255,8 +290,8 @@ class UserInterface:
             self.panel_height = result_height
 
             # Positionner en bas à droite
-            self.panel_x = WIDTH - self.panel_width + 20  # 20px de marge
-            self.panel_y = HEIGHT - self.panel_height + 20  # 20px de marge
+            self.panel_x = WIDTH - self.panel_width - 20  # 20px de marge
+            self.panel_y = HEIGHT - self.panel_height - 20  # 20px de marge
         else:
             self.panel_width = self.default_panel_width
             self.panel_height = self.default_panel_height
@@ -266,24 +301,24 @@ class UserInterface:
         # Mise à jour des positions des boutons APRÈS le repositionnement du panneau
         if self.show_only_result:
             # Positions pour le panneau de résultat
-            self.back_button.x = self.panel_x + (self.panel_width - 200) // 2
-            self.back_button.y = self.panel_y + self.panel_height - 50
+            self.back_button.rect = pygame.Rect(
+                self.panel_x + (self.panel_width - 200) // 2,
+                self.panel_y + self.panel_height - 50,
+                200, 40
+            )
         else:
             # Positions pour le panneau principal
-            self.calculate_button.x = self.panel_x + (self.panel_width - 200) // 2
-            self.calculate_button.y = self.panel_y + self.panel_height - 70
+            self.calculate_button.rect = pygame.Rect(
+                self.panel_x + (self.panel_width - 200) // 2,
+                self.panel_y + self.panel_height - 70,
+                200, 40
+            )
 
         # La croix reste toujours en haut à droite du panneau, peu importe son état
-        self.close_button = Button(
-                self.panel_x + self.panel_width - 30,
-                self.panel_y + 10,
-                20, 20, "X", (255, 0, 0), (200, 0, 0)
-        )
-
-        self.back_button = Button(
+        self.close_button.rect = pygame.Rect(
             self.panel_x + self.panel_width - 30,
             self.panel_y + 10,
-            20, 20, "X", (255, 0, 0), (200, 0, 0)
+            20, 20
         )
 
         panel_rect = pygame.Rect(self.panel_x, self.panel_y, self.panel_width, self.panel_height)
@@ -296,13 +331,25 @@ class UserInterface:
             surface.blit(title_text,
                          (self.panel_x + (self.panel_width - title_text.get_width()) // 2, self.panel_y + 20))
 
+            # Afficher le temps jusqu'à la prochaine mise à jour
+            update_time_left = self.update_interval - (total_time_elapsed - self.last_update_time)
+            update_seconds = max(0, update_time_left) / 60  # Convertir frames en secondes (60 FPS)
+            update_text = font.render(f"Mise à jour dans: {update_seconds:.1f}s", True, (200, 200, 200))
+            surface.blit(update_text, (self.panel_x + 10, self.panel_y + 50))
+
             result_y = self.panel_y + 70
             displayable_route = [attraction for attraction in self.optimized_route if
                                  attraction not in ["exit_gate", "Exit"]]
 
             for i, attraction in enumerate(displayable_route):
-                route_text = font.render(f"{i + 1}. {attraction}", True, (255, 255, 255))
-                surface.blit(route_text, (self.panel_x + 30, result_y + i * 30))
+                # Obtenir le temps d'attente actuel pour cette attraction
+                current_queue = len(queues[attraction])
+                _, _, capacity, duration, _, _ = attractions[attraction]
+                wait_time = (current_queue / max(1, capacity)) * duration
+
+                # Texte avec le temps d'attente
+                route_text = font.render(f"{i + 1}. {attraction} - Attente: {wait_time:.1f} min", True, (255, 255, 255))
+                surface.blit(route_text, (self.panel_x + 10, result_y + i * 30))
 
             self.back_button.draw(surface)
             self.close_button.draw(surface)
@@ -318,8 +365,8 @@ class UserInterface:
             surface.blit(instruction_text, (self.panel_x + 50, self.panel_y + 70))
 
             for i, checkbox in enumerate(self.attraction_checkboxes):
-                checkbox.x = self.panel_x + 50
-                checkbox.y = self.panel_y + 100 + i * 40
+                checkbox.rect.x = self.panel_x + 50
+                checkbox.rect.y = self.panel_y + 100 + i * 40
                 checkbox.draw(surface)
 
             self.calculate_button.draw(surface)
@@ -341,7 +388,6 @@ class UserInterface:
                         surface.blit(num_text,
                                      (pos[0] - num_text.get_width() // 2, pos[1] - num_text.get_height() // 2))
 
-
 def is_attraction_accessible(visitor, attraction_name):
     """Vérifie si un visiteur peut accéder à une attraction en fonction de sa taille."""
     if attraction_name == "Exit" or attraction_name == "exit_gate":
@@ -354,45 +400,51 @@ def is_attraction_accessible(visitor, attraction_name):
         return False
     return True
 
+
 def filter_accessible_attractions(visitor):
     """Filtre les attractions accessibles en fonction de la taille du visiteur."""
     return [name for name in attractions.keys() if is_attraction_accessible(visitor, name)]
 
+
 def build_graph(visitor=None, last_attraction_for_adaptive=None):
     """Construit un graphe où chaque attraction est connectée entre elles et à l'entrée/sortie."""
     graph = {name: {} for name in attractions}
+    graph["exit_gate"] = {}
+    graph["Exit"] = {}
 
-    # Déterminer les attractions accessibles pour ce visiteur
+    # Facteur pour équilibrer distance vs temps d'attente
+    distance_weight = 0.5
+    wait_time_weight = 0.5
+
     accessible_attractions = filter_accessible_attractions(visitor) if visitor else list(attractions.keys())
 
-    # Connecter chaque attraction à toutes les autres accessibles
+
     for a1 in attractions:
         for a2 in accessible_attractions:
             if a1 != a2:
+                # Distance physique entre attractions
                 distance = np.linalg.norm(np.array(attractions[a1][:2]) - np.array(attractions[a2][:2]))
+
+                # Calcul du temps d'attente estimé pour l'attraction de destination
                 current_queue = len(queues[a2])
                 _, _, capacity, duration, _, _ = attractions[a2]
-                # Pénalité si a2 est la dernière attraction visitée par un adaptatif
-                penalty = 1000 if last_attraction_for_adaptive and a2 == last_attraction_for_adaptive else 0
-                cost = (distance / 10) + (current_queue / max(1, capacity)) * duration + penalty
-                graph[a1][a2] = cost
-                graph[a2][a1] = cost  # Connexion bidirectionnelle
 
-    # Ajouter exit_gate pour représenter l'entrée du parc
-    graph["exit_gate"] = {}
-    for attraction in accessible_attractions:
+                wait_time = (current_queue / max(1, capacity)) * duration * 60
+
+                penalty = 5000 if last_attraction_for_adaptive and a2 == last_attraction_for_adaptive else 0
+                cost = (distance_weight * distance) + (wait_time_weight * wait_time) + penalty
+
+                graph[a1][a2] = cost
+                graph[a2][a1] = cost
+
+        # Connexions vers/depuis l'entrée/sortie
+    for attraction in attractions:
         distance = np.linalg.norm(np.array(exit_gate) - np.array(attractions[attraction][:2]))
-        gate_cost = distance / 10
+        gate_cost = distance * distance_weight  # Pas de temps d'attente pour sortir
         graph["exit_gate"][attraction] = gate_cost
         graph[attraction]["exit_gate"] = gate_cost
-
-    # Ajouter "Exit" comme sortie finale
-    graph["Exit"] = {}
-    for attraction in accessible_attractions:
-        distance = np.linalg.norm(np.array(attractions[attraction][:2]) - np.array(exit_gate))
-        exit_cost = distance / 10
-        graph["Exit"][attraction] = exit_cost
-        graph[attraction]["Exit"] = exit_cost
+        graph["Exit"][attraction] = gate_cost
+        graph[attraction]["Exit"] = gate_cost
 
     return graph
 
@@ -401,6 +453,33 @@ def dijkstra(graph, start, targets):
     if not targets:
         return ["exit_gate", "Exit"]
 
+    # Si nous sommes à l'entrée, choisissons l'attraction avec le meilleur rapport
+    # (temps d'attente / intérêt) comme première attraction
+    if start == "exit_gate":
+        best_first = None
+        best_score = float('inf')
+
+        for target in targets:
+            # Calculer un score basé sur la distance et le temps d'attente actuel
+            distance_cost = graph["exit_gate"].get(target, float('inf'))
+            queue_length = len(queues.get(target, []))
+            _, _, capacity, duration, _, _ = attractions.get(target, (0, 0, 1, 1))
+
+            # Facteur de temps d'attente plus important (plus réactif aux changements)
+            wait_time = (queue_length / max(1, capacity)) * duration * 60
+
+            # Score combiné avec plus de poids sur le temps d'attente
+            score = distance_cost * 0.2 + wait_time * 0.8
+
+            if score < best_score:
+                best_score = score
+                best_first = target
+
+        if best_first:
+            remaining = [t for t in targets if t != best_first]
+            return ["exit_gate", best_first] + dijkstra(graph, best_first, remaining)[1:]
+
+    # Algorithme Dijkstra modifié pour parcourir toutes les cibles
     current = start
     path = [current]
     remaining_targets = targets.copy()
@@ -412,6 +491,18 @@ def dijkstra(graph, start, targets):
         for target in remaining_targets:
             if target in graph.get(current, {}):
                 cost = graph[current][target]
+
+                # Ajustement dynamique du coût basé sur l'évolution des files d'attente
+                if target in attractions:
+                    queue_length = len(queues.get(target, []))
+                    _, _, capacity, duration, _, _ = attractions.get(target, (0, 0, 1, 1))
+
+                    # Facteur d'attente plus sensible
+                    wait_factor = (queue_length / max(1, capacity)) * duration * 60
+
+                    # Plus la file est longue, plus le coût augmente
+                    cost += wait_factor * 0.8  # Donner plus de poids au temps d'attente
+
                 if cost < best_cost:
                     best_cost = cost
                     best_next = target
@@ -421,9 +512,37 @@ def dijkstra(graph, start, targets):
             path.append(current)
             remaining_targets.remove(current)
         else:
-            current = remaining_targets[0]
-            path.append(current)
-            remaining_targets.remove(current)
+            # Si aucune attraction n'est accessible directement, prenons la moins mauvaise
+            best_overall = None
+            best_overall_cost = float('inf')
+
+            for target in remaining_targets:
+                # Calculer un score combiné pour chaque attraction restante
+                distance_to_target = np.linalg.norm(
+                    np.array(attractions.get(current, exit_gate)[:2]) -
+                    np.array(attractions.get(target, exit_gate)[:2])
+                )
+
+                queue_length = len(queues.get(target, []))
+                _, _, capacity, duration, _, _ = attractions.get(target, (0, 0, 1, 1))
+                wait_time = (queue_length / max(1, capacity)) * duration * 60
+
+                # Coût combiné avec plus d'importance sur le temps d'attente
+                combined_cost = distance_to_target * 0.2 + wait_time * 0.8
+
+                if combined_cost < best_overall_cost:
+                    best_overall_cost = combined_cost
+                    best_overall = target
+
+            if best_overall:
+                current = best_overall
+                path.append(current)
+                remaining_targets.remove(current)
+            else:
+                # Fallback au cas où
+                current = remaining_targets[0]
+                path.append(current)
+                remaining_targets.remove(current)
 
     path.append("Exit")
     return path
@@ -509,7 +628,6 @@ def generate_new_visitor():
         "silverstar": 8,
         "euromir": 4,
         "eurosat": 7,
-
     }
     if not toutatis_maintenance:
         attraction_weights["toutatis"] = 8
@@ -624,6 +742,25 @@ def generate_new_visitor():
     return visitor
 
 
+# Pour générer un visiteur fixe (utilisé pour le témoin et le demo)
+def generate_fixed_visitor(optimal_path):
+    # Retirer "exit_gate" et "Exit" du début
+    route = [node for node in optimal_path if node not in ["exit_gate", "Exit"]]
+    v = generate_new_visitor()
+    v["position"] = np.array(exit_gate, dtype=np.float64)
+    v["visited_attractions"] = []  # Liste des attractions déjà visitées
+    v["just_finished_attraction"] = False  # Flag pour savoir quand actualiser
+    if route:
+        v["destination"] = route[0]
+        v["planned_route"] = route[1:] if len(route) > 1 else []
+    else:
+        v["destination"] = "Exit"
+        v["planned_route"] = []
+    return v
+
+# Global pour le visiteur témoin
+witness_visitor = None
+
 ui = UserInterface()
 
 plan_route_button = Button(
@@ -645,19 +782,22 @@ while running:
 
     graph = build_graph()
 
-    positions = {name: (x, y) for name, (x, y, _, _) in attractions.items()}
+    positions = {name: (x, y) for name, (x, y, _, _,_,_) in attractions.items()}
     positions["exit_gate"] = exit_gate
-    positions["Exit"] = exit_gate  # Tu peux ajuster si la sortie est ailleurs
+    positions["Exit"] = exit_gate
 
     drawn = set()
     for node in graph:
         for neighbor in graph[node]:
             key = tuple(sorted((node, neighbor)))
             if key not in drawn:
-                x1, y1 = positions[node]
-                x2, y2 = positions[neighbor]
+                x1, y1 = positions.get(node, exit_gate)
+                x2, y2 = positions.get(neighbor, exit_gate)
                 pygame.draw.line(screen, (220, 220, 220), (x1, y1), (x2, y2), 1)
                 drawn.add(key)
+
+    mouse_pos = pygame.mouse.get_pos()
+    mouse_clicked = False
 
     # Apparition progressive des visiteurs depuis l'entrée
     total_time_elapsed += 1
@@ -675,8 +815,9 @@ while running:
             elif event.key == pygame.K_DOWN:
                 spawn_curve_factor = min(500, spawn_curve_factor + 10)
             elif event.key == pygame.K_LEFT:
-                spawn_interval = max(1, spawn_interval - 1)
+                spawn_interval = max(1, spawn_interval - 8)
             elif event.key == pygame.K_RIGHT:
+                spawn_interval = min(400, spawn_interval + 8)
                 spawn_interval = min(100, spawn_interval + 1)
 
             elif event.key == pygame.K_SPACE:
@@ -713,7 +854,7 @@ while running:
                 else:
                     print("Toutatis est de nouveau opérationnel.")
 
-    if visitor_spawn_timer <= 0 and not ui.active:
+    if visitor_spawn_timer <= 0:
         num_visitors = random.randint(2, 5)
         for _ in range(num_visitors):
             if random.random() < spawn_probability:
@@ -846,6 +987,179 @@ while running:
     visitors = [visitor for visitor in visitors if not visitor["finished"]]
     visitor_count = len(visitors)
 
+    # Mise à jour et affichage du visiteur en surbrillance (route_demo_visitor)
+    if route_demo_visitor is not None:
+        if np.linalg.norm(route_demo_visitor["position"] - route_demo_visitor["prev_position"]) < 1 and \
+                route_demo_visitor["prev_destination"] == route_demo_visitor["destination"]:
+            route_demo_visitor["stuck_timer"] += 1
+        else:
+            route_demo_visitor["stuck_timer"] = 0
+        route_demo_visitor["prev_position"] = route_demo_visitor["position"].copy()
+        route_demo_visitor["prev_destination"] = route_demo_visitor["destination"]
+        dname = route_demo_visitor["destination"]
+        dpos = np.array(attractions.get(dname, exit_gate)[:2], dtype=np.float64)
+        dir_vect = dpos - route_demo_visitor["position"]
+        dist = np.linalg.norm(dir_vect)
+        if dist > 15:
+            route_demo_visitor["position"] += (dir_vect / dist) * route_demo_visitor["speed"]
+        else:
+            if route_demo_visitor.get("planned_route") and len(route_demo_visitor["planned_route"]) > 0:
+                route_demo_visitor["destination"] = route_demo_visitor["planned_route"].pop(0)
+                route_demo_visitor["cooldown_timer"] = 0
+            else:
+                route_demo_visitor["destination"] = "Exit"
+        dsize = max(5, int(min(WIDTH, HEIGHT) * 0.007))
+        pygame.draw.circle(screen, (255, 0, 255), route_demo_visitor["position"].astype(int), dsize)
+
+    # Mise à jour et affichage du visiteur témoin (witness_visitor)
+    # Mise à jour et affichage du visiteur témoin (witness_visitor)
+    if ui.optimized_route and len(ui.optimized_route) > 1:
+        if witness_visitor is None:
+            witness_visitor = generate_fixed_visitor(ui.optimized_route)
+            witness_visitor["witness"] = True
+            witness_visitor["wait_time"] = 0
+            witness_visitor["in_attraction_timer"] = 0
+            witness_visitor["visiting_attraction"] = False
+
+        if witness_visitor["visiting_attraction"]:
+            witness_visitor["in_attraction_timer"] -= 1
+
+            # Afficher un texte indiquant que le visiteur profite de l'attraction
+            if witness_visitor["in_attraction_timer"] > 0:
+                attraction_name = witness_visitor["last_attraction"]
+                enjoy_text = font.render(f"Profite de {attraction_name}", True, (0, 0, 255))
+                screen.blit(enjoy_text, (witness_visitor["position"][0] - enjoy_text.get_width() // 2,
+                                         witness_visitor["position"][1] - 30))
+
+            # Si le temps de visite est terminé, continuer vers la prochaine attraction
+            if witness_visitor["in_attraction_timer"] <= 0:
+                witness_visitor["visiting_attraction"] = False
+
+                # Marquer l'attraction comme visitée
+                current_attraction = witness_visitor["last_attraction"]
+                if current_attraction not in witness_visitor.get("visited_attractions", []):
+                    witness_visitor["visited_attractions"].append(current_attraction)
+
+                # Indiquer que le visiteur vient de terminer une attraction
+                witness_visitor["just_finished_attraction"] = True
+
+                # Recalculer le parcours si on a encore des attractions à visiter
+                if ui.selected_attractions:
+                    remaining = [a for a in ui.selected_attractions
+                                 if a not in witness_visitor["visited_attractions"]]
+                    if remaining:
+                        ui.calculate_optimal_route(remaining)
+                        if ui.optimized_route and len(ui.optimized_route) > 1:
+                            route = [node for node in ui.optimized_route
+                                     if node not in ["exit_gate", "Exit"]]
+                            if route:
+                                witness_visitor["destination"] = route[0]
+                                witness_visitor["planned_route"] = route[1:] if len(route) > 1 else []
+                            else:
+                                witness_visitor["destination"] = "Exit"
+                                witness_visitor["planned_route"] = []
+                    else:
+                        witness_visitor["destination"] = "Exit"
+                        witness_visitor["planned_route"] = []
+        else:
+            # Mise à jour de la position normale quand pas dans une attraction
+            if np.linalg.norm(witness_visitor["position"] - witness_visitor["prev_position"]) < 1 and \
+                    witness_visitor["prev_destination"] == witness_visitor["destination"]:
+                witness_visitor["stuck_timer"] += 1
+            else:
+                witness_visitor["stuck_timer"] = 0
+
+            witness_visitor["prev_position"] = witness_visitor["position"].copy()
+            witness_visitor["prev_destination"] = witness_visitor["destination"]
+
+            dname = witness_visitor["destination"]
+
+            # Obtenir la position de destination
+            if dname in attractions:
+                dpos = np.array(attractions[dname][:2], dtype=np.float64)
+            else:  # Pour "Exit" ou autre
+                dpos = np.array(exit_gate, dtype=np.float64)
+
+            dir_vect = dpos - witness_visitor["position"]
+            dist = np.linalg.norm(dir_vect)
+
+            # Si on est arrivé à la destination
+            if dist <= 15:
+                if dname in attractions:
+                    # On est arrivé à une attraction, commencer à la visiter
+                    _, _, _, duration, _, _ = attractions[dname]
+                    witness_visitor["visiting_attraction"] = True
+                    witness_visitor["in_attraction_timer"] = duration * 60  # Durée en secondes
+                    witness_visitor["last_attraction"] = dname
+
+                    # Afficher un message d'attente à côté du visiteur
+                    wait_time = len(queues[dname]) / max(1, attractions[dname][2]) * attractions[dname][3] * 60
+                    witness_visitor["wait_time"] = wait_time
+
+                    # Temps d'attente affiché à côté du visiteur
+                    if wait_time > 0:
+                        wait_text = font.render(f"Attente: {wait_time / 60:.1f} min", True, (0, 0, 255))
+                        screen.blit(wait_text, (witness_visitor["position"][0] - wait_text.get_width() // 2,
+                                                witness_visitor["position"][1] - 30))
+                else:
+                    # Si c'est la sortie ou autre point non-attraction
+                    if witness_visitor.get("planned_route") and len(witness_visitor["planned_route"]) > 0:
+                        witness_visitor["destination"] = witness_visitor["planned_route"].pop(0)
+                    else:
+                        witness_visitor["destination"] = "Exit"
+            else:
+                # Continuer à se déplacer vers la destination
+                witness_visitor["position"] += (dir_vect / dist) * witness_visitor["speed"]
+
+        # Dessiner le visiteur témoin
+        wsize = max(5, int(min(WIDTH, HEIGHT) * 0.007))
+        pygame.draw.circle(screen, (0, 0, 255), witness_visitor["position"].astype(int), wsize)
+
+        # Afficher des informations sur le parcours du visiteur témoin
+        if witness_visitor["visiting_attraction"]:
+            attraction_name = witness_visitor["last_attraction"]
+            time_left = witness_visitor["in_attraction_timer"] / 60
+            status_text = font.render(f"Visite {attraction_name}: {time_left:.1f}s", True, (0, 0, 255))
+        elif witness_visitor["destination"] == "Exit":
+            status_text = font.render("Se dirige vers la sortie", True, (0, 0, 255))
+        else:
+            next_dest = witness_visitor["destination"]
+            status_text = font.render(f"Vers: {next_dest}", True, (0, 0, 255))
+
+        # Afficher le statut sous la fenêtre des statistiques
+        screen.blit(status_text, (10, info_panel_height + 20))
+
+        # Afficher le reste du parcours prévu
+        if witness_visitor.get("planned_route") and len(witness_visitor["planned_route"]) > 0:
+            route_text = font.render(f"À venir: {', '.join(witness_visitor['planned_route'])}", True, (0, 0, 255))
+            screen.blit(route_text, (10, info_panel_height + 40))
+
+    else:
+        witness_visitor = None
+
+
+    # Dessin permanent du trajet optimisé (lignes et nœuds)
+    if ui.route_calculated and ui.optimized_route:
+        # Trouver le point de départ effectif pour le tracé
+        start_pos = None
+        if witness_visitor:
+            start_pos = witness_visitor["position"].astype(int)
+        else:
+            # Utiliser la position de l'entrée comme fallback
+            start_pos = exit_gate
+
+        # Dessiner la ligne du point actuel à la première attraction planifiée
+        if len(ui.route_nodes) > 0:
+            pygame.draw.line(screen, (255, 255, 0), start_pos, ui.route_nodes[0], 3)
+
+        # Dessiner le reste du parcours optimisé
+        for start, end in ui.route_edges:
+            pygame.draw.line(screen, (255, 255, 0), start, end, 3)
+
+        # Dessiner les nœuds
+        for pos in ui.route_nodes:
+            pygame.draw.circle(screen, (0, 255, 0), pos, 8)
+
     for attraction in queues:
         _, _, capacity, duration, _, _ = attractions[attraction]
         if cycle_timer[attraction] == 0 and len(queues[attraction]) > 0:
@@ -875,7 +1189,6 @@ while running:
             in_attraction[attraction].remove(visitor)
             visitor["in_queue"] = False
             visitor["cooldown_timer"] = 120
-            # Pour les adaptatifs, retirer l'attraction visitée de leurs désirs
             if not visitor["fixed_path"]:
                 if attraction in visitor["desires"]:
                     visitor["desires"].remove(attraction)
@@ -901,7 +1214,7 @@ while running:
                     else:
                         visitor["rejections"] += 1
                         print(f"🚫 Visiteur {id(visitor)} - Skipping {candidate} (taille: {visitor['height']}m incompatible)")
-
+                
                 if next_attraction:
                     visitor["destination"] = next_attraction
                 else:
@@ -928,6 +1241,18 @@ while running:
                 visitor["position"] += visitor["exit_direction"] * visitor["speed"]
             else:
                 visitor["exit_direction"] = np.array([0, 0])
+
+    queue_change_detected = False
+    for name in attractions.keys():
+        if queues[name] and len(queues[name]) > 15:  # Si une file d'attente devient longue
+            queue_change_detected = True
+            break
+
+    # Forcer la mise à jour de l'itinéraire si UI active et qu'un changement majeur est détecté
+    if ui.active and ui.show_only_result and queue_change_detected:
+        ui.update(mouse_pos, mouse_clicked, force_update=True)
+    else:
+        ui.update(mouse_pos, mouse_clicked)
 
     average_wait_fixed = 10 * (total_wait_fixed / count_fixed) / 60 if count_fixed > 0 else 0
     average_wait_adaptive = 10 * (total_wait_adaptive / count_adaptive) / 60 if count_adaptive > 0 else 0
@@ -978,8 +1303,9 @@ while running:
         ui.toggle()
 
     plan_route_button.draw(screen)
-    ui.update(mouse_pos, mouse_clicked)
+    #ui.update(mouse_pos, mouse_clicked)
     ui.draw(screen)
+
     pygame.display.flip()
     clock.tick(60)
 
